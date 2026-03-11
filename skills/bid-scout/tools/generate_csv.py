@@ -5,7 +5,14 @@
     python3 generate_csv.py --input filtered.json --output report.csv
     cat filtered.json | python3 generate_csv.py --output report.csv
 
-输出列: 来源站点, 标题, 发布日期, URL, 摘要, 匹配分数, 匹配等级, 匹配原因
+支持输入格式:
+    - JSON 数组 (keyword_filter.py 输出)
+    - 包含 "items" 字段的 JSON 对象 (gdgpo_api_fetch.py 完整输出)
+
+输出列: 来源站点, 关键词, 标题, 发布日期, 地区, 公告类型, 采购人,
+        预算金额, 匹配分数, 匹配等级, 匹配原因, URL, 详情页URL, 摘要,
+        详情正文, 抓取方式, 数据质量, 抓取时间
+
 默认 utf-8-sig 编码以兼容 Excel 中文显示。
 
 退出码: 0 成功, 1 失败
@@ -22,17 +29,35 @@ from pathlib import Path
 
 CSV_COLUMNS = [
     ("source_site", "来源站点"),
+    ("keyword", "关键词"),
     ("title", "标题"),
     ("publish_date", "发布日期"),
-    ("url", "URL"),
+    ("region", "地区"),
+    ("notice_type", "公告类型"),
     ("purchaser", "采购人"),
     ("budget", "预算金额"),
-    ("summary", "摘要"),
-    ("detail_text", "详情正文"),
     ("match_score", "匹配分数"),
     ("match_level", "匹配等级"),
     ("match_reason", "匹配原因"),
+    ("url", "URL"),
+    ("detail_url", "详情页URL"),
+    ("summary", "摘要"),
+    ("detail_text", "详情正文"),
+    ("crawl_method", "抓取方式"),
+    ("data_quality", "数据质量"),
+    ("crawl_time", "抓取时间"),
 ]
+
+
+def extract_items(data: list | dict) -> list[dict]:
+    """从输入中提取条目列表，兼容数组和对象两种格式。"""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and "items" in data:
+        items = data["items"]
+        if isinstance(items, list):
+            return items
+    raise ValueError("输入必须是 JSON 数组或包含 'items' 字段的 JSON 对象")
 
 
 def items_to_csv(items: list[dict], encoding: str = "utf-8-sig") -> bytes:
@@ -72,10 +97,8 @@ def main() -> int:
         else:
             raw = sys.stdin.read()
 
-        items = json.loads(raw)
-        if not isinstance(items, list):
-            print("错误: 输入必须是 JSON 数组", file=sys.stderr)
-            return 1
+        data = json.loads(raw)
+        items = extract_items(data)
 
         csv_bytes = items_to_csv(items, encoding=args.encoding)
         output_path = Path(args.output)
@@ -88,8 +111,8 @@ def main() -> int:
     except json.JSONDecodeError as e:
         print(f"JSON 解析错误: {e}", file=sys.stderr)
         return 1
-    except FileNotFoundError as e:
-        print(f"文件未找到: {e}", file=sys.stderr)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"错误: {e}", file=sys.stderr)
         return 1
     except Exception as e:
         print(f"未知错误: {e}", file=sys.stderr)

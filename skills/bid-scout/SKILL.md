@@ -13,7 +13,8 @@ metadata: { "openclaw": { "emoji": "📋" } }
 - **智能页面解析**：browser 导航 + screenshot + image 视觉识别 + snapshot 可访问性树
 - **关键词筛选打分**：体育关键词 + 服务运营关键词交叉打分
 - **人工接管**：遇到验证码/登录/403 时通过 `sessions_send` 双向通信，通知用户处理
-- **CSV 报告输出**：生成 Excel 兼容的 CSV 文件
+- **CSV 报告输出**：生成 Excel 兼容的 CSV 文件（18 列标准结构，utf-8-sig 编码）
+- **HTML 情报报告**：生成可浏览器直接打开的 HTML 报告（摘要统计 + 主表格 + 折叠详情 + 异常区）
 
 ## 核心原则（必须严格遵守）
 
@@ -42,20 +43,24 @@ metadata: { "openclaw": { "emoji": "📋" } }
 
 本技能附带 Python 工具，相对于 SKILL.md 所在目录：
 - **关键词筛选**：`tools/keyword_filter.py`
-- **CSV 生成**：`tools/generate_csv.py`
-- **广东站 API 抓取**：`tools/gdgpo_api_fetch.py`（API-first 核心脚本）
+- **CSV 生成**：`tools/generate_csv.py`（18 列标准结构）
+- **HTML 报告**：`tools/generate_html.py`（情报报告，含摘要/表格/折叠详情/异常区）
+- **广东站 API 抓取**：`tools/gdgpo_api_fetch.py`（API-first 核心脚本，输出统一 JSON Schema）
 - **广东站接口探测**：`tools/gdgpo_probe_api.py`（发现/验证搜索 API 端点）
 - **广东站接口配置**：`config/gdgpo_api.json`（接口参数、字段映射、选择器）
 
 调用时必须使用绝对路径，基于技能目录解析。例如：
 ```
 exec command:"python3 {skill_dir}/tools/keyword_filter.py --input /tmp/bid_raw.json --output /tmp/bid_filtered.json"
-exec command:"python3 {skill_dir}/tools/generate_csv.py --input /tmp/bid_filtered.json --output /home/node/.openclaw/workspace/bid_report.csv"
+exec command:"python3 {skill_dir}/tools/generate_csv.py --input /tmp/bid_filtered.json --output /tmp/bid_report.csv"
+exec command:"python3 {skill_dir}/tools/generate_html.py --input /tmp/bid_raw.json --output /tmp/bid_report.html"
 exec command:"python3 {skill_dir}/tools/gdgpo_api_fetch.py --keyword 体育 --pages 5 --config {skill_dir}/config/gdgpo_api.json --output /tmp/gdgpo_raw.json --verbose"
 exec command:"python3 {skill_dir}/tools/gdgpo_probe_api.py --config {skill_dir}/config/gdgpo_api.json --output /tmp/gdgpo_probe.json --verbose"
 ```
 
 > **广东省政府采购网采集策略**：优先使用 API-first 模式（通过 `gdgpo_api_fetch.py` 直接调用站点数据接口），browser 仅作为兜底方案。API 模式更稳定、精度更高、不依赖浏览器渲染状态。
+
+> **标准输出 Pipeline**：`gdgpo_api_fetch.py` → `/tmp/bid_raw.json`（统一 JSON Schema）→ `keyword_filter.py` → `generate_csv.py` → `/tmp/bid_report.csv` + `generate_html.py` → `/tmp/bid_report.html`。所有站点输出统一 Schema，包含 `source_site`、`detail_url`、`detail_url_status`、`crawl_method`、`data_quality`、`crawl_time` 等元信息字段。
 
 ## 操作流程
 
@@ -378,19 +383,24 @@ exec command:"python3 {skill_dir}/tools/keyword_filter.py --input /tmp/bid_site_
 
 4. **生成 CSV**：
 ```
-exec command:"python3 {skill_dir}/tools/generate_csv.py --input /tmp/bid_filtered.json --output /home/node/.openclaw/workspace/bid_report.csv"
+exec command:"python3 {skill_dir}/tools/generate_csv.py --input /tmp/bid_filtered.json --output /tmp/bid_report.csv"
 ```
 
-5. **清理标签页**（可选）：
+5. **生成 HTML 情报报告**：
+```
+exec command:"python3 {skill_dir}/tools/generate_html.py --input /tmp/bid_raw.json --output /tmp/bid_report.html"
+```
+
+6. **清理标签页**（可选）：
 ```
 browser close targetId:"{targetId_A}"
 browser close targetId:"{targetId_B}"
 ```
 
-6. **向用户报告**：
+7. **向用户报告**：
    - 输出采集摘要（各站点采集数量、成功/失败状态）
    - 输出高匹配度条目的标题和分数
-   - 告知 CSV 文件路径
+   - 告知 CSV 文件路径和 HTML 报告路径
 
 ### 第七步：报告格式
 
@@ -404,7 +414,8 @@ browser close targetId:"{targetId_B}"
 | 1 | 广州体育局 | xxx | 2026-03-10 | ★★★ 高 |
 | 2 | 广东政府采购网 | xxx | 2026-03-09 | ★★ 中 |
 
-📄 完整报告：`/home/node/.openclaw/workspace/bid_report.csv`
+📄 CSV 报告：`/tmp/bid_report.csv`
+📊 HTML 报告：`/tmp/bid_report.html`（可直接浏览器打开）
 ```
 
 匹配度星级：

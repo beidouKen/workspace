@@ -82,7 +82,7 @@ def apply_filter(items: list[dict]) -> list[dict]:
         ])
         result = score_text(combined)
         item["match_score"] = result.score
-        item["match_reason"] = result.reasons
+        item["match_reason"] = "; ".join(result.reasons)
         item["match_level"] = result.level
     items.sort(key=lambda x: x.get("match_score", 0), reverse=True)
     return items

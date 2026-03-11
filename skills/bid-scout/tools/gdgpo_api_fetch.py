@@ -283,6 +283,7 @@ def search_page(
 def parse_search_response(
     data: Any,
     mapping: dict[str, str],
+    keyword: str = "",
 ) -> tuple[list[dict[str, Any]], int]:
     """从搜索 API 响应中提取条目列表。
 
@@ -340,7 +341,7 @@ def parse_search_response(
     for raw_item in items_list:
         if not isinstance(raw_item, dict):
             continue
-        item = _map_item(raw_item, mapping)
+        item = _map_item(raw_item, mapping, keyword=keyword)
         mapped_items.append(item)
 
     return mapped_items, total
@@ -358,9 +359,37 @@ def _resolve_json_path(data: Any, path: str) -> Any:
     return current
 
 
-def _map_item(raw: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
-    """将原始记录映射为标准字段结构。"""
-    item: dict[str, Any] = {"source_site": "广东省政府采购网", "raw": raw}
+def _map_item(
+    raw: dict[str, Any],
+    mapping: dict[str, str],
+    keyword: str = "",
+) -> dict[str, Any]:
+    """将原始记录映射为统一 JSON Schema 结构。"""
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    item: dict[str, Any] = {
+        "source_site": "广东省政府采购网",
+        "source_channel": "",
+        "keyword": keyword,
+        "title": "",
+        "publish_date": "",
+        "url": SEARCH_PAGE_URL,
+        "detail_url": "",
+        "detail_url_status": "unresolved_js_detail",
+        "summary": "",
+        "detail_text": "",
+        "purchaser": "",
+        "budget": "",
+        "region": "",
+        "notice_type": "",
+        "match_score": 0,
+        "match_level": "",
+        "match_reason": "",
+        "crawl_method": "api",
+        "data_quality": "low",
+        "crawl_time": now_iso,
+        "raw": raw,
+    }
 
     field_candidates: dict[str, list[str]] = {
         "title": [mapping.get("title", ""), "title", "name", "noticeName",
@@ -368,8 +397,8 @@ def _map_item(raw: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
         "publish_date": [mapping.get("publish_date", ""), "publishDate", "createTime",
                         "publishTime", "pubDate", "createDate", "releaseDate",
                         "issueTime", "noticeTime"],
-        "url": [mapping.get("url", ""), "url", "link", "detailUrl", "href",
-                "noticeUrl", "articleUrl"],
+        "detail_url": [mapping.get("url", ""), "url", "link", "detailUrl", "href",
+                       "noticeUrl", "articleUrl"],
         "summary": [mapping.get("summary", ""), "summary", "content", "description",
                     "digest", "abstractContent", "brief"],
         "purchaser": [mapping.get("purchaser", ""), "purchaser", "buyerName",
@@ -378,6 +407,9 @@ def _map_item(raw: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
         "budget": [mapping.get("budget", ""), "budget", "budgetAmount",
                    "totalBudget", "projectAmount", "amount",
                    "ysje", "cgys", "estimatedAmount"],
+        "region": ["region", "areaName", "districtName", "city", "area"],
+        "notice_type": ["noticeType", "type", "cgfs", "purchaseType",
+                        "procurementMethod", "bidType"],
     }
 
     for standard_field, candidates in field_candidates.items():
@@ -388,12 +420,12 @@ def _map_item(raw: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
             if val and str(val).strip():
                 item[standard_field] = str(val).strip()
                 break
-        if standard_field not in item:
-            item[standard_field] = ""
 
-    # 补全 URL 为绝对路径
-    if item.get("url") and not item["url"].startswith("http"):
-        item["url"] = urljoin(BASE_URL, item["url"])
+    if item["detail_url"] and not item["detail_url"].startswith("http"):
+        item["detail_url"] = urljoin(BASE_URL, item["detail_url"])
+
+    if item["detail_url"]:
+        item["detail_url_status"] = "resolved"
 
     return item
 
@@ -493,6 +525,19 @@ def fetch_detail(
 # ---------------------------------------------------------------------------
 # 体育相关性评分
 # ---------------------------------------------------------------------------
+
+
+def evaluate_data_quality(item: dict[str, Any]) -> str:
+    """根据字段完整度评估数据质量。"""
+    has_detail_url = bool(item.get("detail_url"))
+    has_detail_text = bool(item.get("detail_text", "").strip())
+    has_summary = bool(item.get("summary", "").strip())
+
+    if has_detail_url and has_detail_text:
+        return "high"
+    if has_summary:
+        return "medium"
+    return "low"
 
 
 def score_sports_relevance(item: dict[str, Any]) -> float:
@@ -670,7 +715,7 @@ def main() -> int:
             time.sleep(page_delay)
             continue
 
-        items, total = parse_search_response(resp_data, result_mapping)
+        items, total = parse_search_response(resp_data, result_mapping, keyword=args.keyword)
         logger.info("第 %d 页解析出 %d 条 (总计约 %d 条)", page_num, len(items), total)
 
         if not items:
@@ -685,21 +730,21 @@ def main() -> int:
         if not args.no_detail and detail_selectors:
             detail_success = 0
             for idx, item in enumerate(items):
-                detail_url = item.get("url", "")
-                if not detail_url:
+                d_url = item.get("detail_url", "")
+                if not d_url:
                     continue
-                logger.info("  详情 [%d/%d]: %s", idx + 1, len(items), detail_url)
-                detail = fetch_detail(session, detail_url, detail_selectors, headers, timeout)
+                logger.info("  详情 [%d/%d]: %s", idx + 1, len(items), d_url)
+                detail = fetch_detail(session, d_url, detail_selectors, headers, timeout)
                 if detail:
-                    # 合并详情字段，不覆盖已有非空值
                     for key, val in detail.items():
                         if val and not item.get(key):
                             item[key] = val
+                    item["crawl_method"] = "api+browser_detail"
+                    item["detail_url_status"] = "resolved"
                     detail_success += 1
                 time.sleep(detail_delay)
             logger.info("  详情页成功: %d/%d", detail_success, len(items))
 
-        # 体育相关性评分（同步写入 match_score/match_level 以兼容 generate_csv.py）
         for item in items:
             s = score_sports_relevance(item)
             item["score"] = s
@@ -712,6 +757,7 @@ def main() -> int:
                 item["match_level"] = "low-medium"
             else:
                 item["match_level"] = "low"
+            item["data_quality"] = evaluate_data_quality(item)
 
         all_items.extend(items)
         time.sleep(page_delay)
